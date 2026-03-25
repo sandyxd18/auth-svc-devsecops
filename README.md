@@ -26,21 +26,6 @@ Production-ready JWT authentication microservice built with **Bun**, **Express**
 
 ```
 auth-service/
-├── observability/
-│   ├── alloy/
-│   │   └── config.alloy          # Alloy: log scrape + trace forwarding config
-│   ├── grafana/
-│   │   ├── dashboards/
-│   │   │   └── auth-overview.json  # Pre-built Grafana dashboard
-│   │   └── provisioning/
-│   │       ├── dashboards/
-│   │       │   └── dashboards.yaml
-│   │       └── datasources/
-│   │           └── datasources.yaml  # Auto-provisions Prometheus, Loki, Tempo
-│   ├── prometheus/
-│   │   └── prometheus.yml        # Scrape config for auth-service /metrics
-│   ├── loki.yaml                 # Loki log storage config
-│   └── tempo.yaml                # Tempo trace storage config
 ├── prisma/
 │   └── schema.prisma
 ├── src/
@@ -125,8 +110,8 @@ Every log entry emitted by Winston **automatically includes** the active OpenTel
 ### 1. Clone & Install
 
 ```bash
-git clone <repo-url>
-cd auth-service
+git clone https://github.com/sandyxd18/auth-svc-devsecops.git
+cd auth-svc-devsecops
 bun install
 ```
 
@@ -168,35 +153,6 @@ bun run start   # production
 ```
 
 ---
-
-## 🐳 Docker Deployment
-
-### Letak File Docker
-
-```
-auth-service/
-├── Dockerfile         ← root (wajib)
-├── .dockerignore      ← root (wajib)
-├── docker-compose.yml ← root (wajib)
-├── entrypoint.sh      ← root (wajib)
-└── observability/     ← config files di-mount ke tiap container
-```
-
-### Jalankan Full Stack (App + Observability)
-
-```bash
-# Build & jalankan semua service
-docker compose up --build
-
-# Background mode
-docker compose up --build -d
-
-# Lihat log auth-service saja
-docker compose logs -f auth-service
-
-# Reset total (hapus semua data)
-docker compose down -v && docker compose up --build
-```
 
 ### Service URLs setelah stack berjalan
 
@@ -441,7 +397,7 @@ Authorization: Bearer <admin-token>
 | password | `Admin@1234!` |
 | role | `admin` |
 
-> **Wajib ganti** `ADMIN_PASSWORD` di `docker-compose.yml` / `.env` sebelum production.
+> **Wajib ganti** `ADMIN_PASSWORD` di `.env` sebelum production.
 
 Seeder menggunakan `upsert` — aman dijalankan berkali-kali.
 
