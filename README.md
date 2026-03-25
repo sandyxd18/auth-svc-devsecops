@@ -56,7 +56,6 @@ auth-service/
 │   └── server.ts                 # Entry point (tracer imported first)
 ├── .dockerignore
 ├── .env.example
-├── docker-compose.yml            # App + full observability stack
 ├── Dockerfile
 ├── entrypoint.sh
 ├── package.json
@@ -100,7 +99,7 @@ Every log entry emitted by Winston **automatically includes** the active OpenTel
 
 ---
 
-## Getting Started (Local without Docker)
+## Getting Started
 
 ### Prerequisites
 
