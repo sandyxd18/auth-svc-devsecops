@@ -2,6 +2,3 @@ node_modules/
 .env
 dist/
 *.log
-docker-compose.yml
-observability/
-data/
