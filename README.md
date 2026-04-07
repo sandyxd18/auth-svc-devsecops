@@ -1,4 +1,4 @@
-# 🔐 Auth Microservice
+# 🔐 Auth Service
 
 Production-ready JWT authentication microservice built with **Bun**, **Express**, **PostgreSQL**, and **Prisma** — fully instrumented with metrics, logs, and distributed tracing via the Grafana observability stack.
 
@@ -10,13 +10,12 @@ Production-ready JWT authentication microservice built with **Bun**, **Express**
 |---|---|
 | Runtime | Bun |
 | Framework | Express.js |
-| Database | PostgreSQL |
-| ORM | Prisma |
+| Database | PostgreSQL + Prisma |
 | Auth | JWT (jsonwebtoken) |
 | Password Hashing | bcryptjs (12 rounds) |
 | Validation | Zod |
-| Metrics | prom-client (Prometheus) |
-| Logs | Winston → Alloy → Loki |
+| Metrics | prom-client → Prometheus |
+| Logs | Winston (JSON) → Alloy → Loki |
 | Traces | OpenTelemetry → Alloy → Tempo |
 | Visualization | Grafana |
 
@@ -27,75 +26,39 @@ Production-ready JWT authentication microservice built with **Bun**, **Express**
 ```
 auth-service/
 ├── prisma/
-│   └── schema.prisma
+│   └── schema.prisma              # users table schema
 ├── src/
 │   ├── config/
-│   │   └── env.ts
+│   │   └── env.ts                 # Env var validation & typed access
 │   ├── controllers/
-│   │   └── auth.controller.ts
+│   │   └── auth.controller.ts     # HTTP layer — parse, validate, respond
 │   ├── db/
-│   │   ├── prisma.ts
-│   │   └── seed.ts
+│   │   ├── prisma.ts              # Prisma client singleton
+│   │   └── seed.ts                # Default admin seeder
 │   ├── middleware/
-│   │   ├── auth.ts               # authenticateJWT + authorizeRole
-│   │   ├── errorHandler.ts       # Structured error logging
-│   │   └── requestLogger.ts      # HTTP log + Prometheus metrics per request
+│   │   ├── auth.ts                # authenticateJWT + authorizeRole
+│   │   ├── errorHandler.ts        # Structured error logging
+│   │   └── requestLogger.ts       # HTTP log + Prometheus metrics per request
 │   ├── routes/
-│   │   └── auth.routes.ts
+│   │   └── auth.routes.ts         # Route definitions
 │   ├── services/
-│   │   └── auth.service.ts       # Business logic + auth metrics emission
+│   │   └── auth.service.ts        # Business logic + auth metrics emission
 │   ├── telemetry/
-│   │   ├── logger.ts             # Winston JSON logger (injects trace_id/span_id)
-│   │   ├── metrics.ts            # prom-client registry + metric definitions
-│   │   └── tracer.ts             # OpenTelemetry SDK init (MUST load first)
+│   │   ├── logger.ts              # Winston JSON logger (injects trace_id/span_id)
+│   │   ├── metrics.ts             # prom-client registry + metric definitions
+│   │   └── tracer.ts              # OpenTelemetry SDK init (MUST load first)
 │   ├── utils/
-│   │   ├── jwt.ts
-│   │   ├── response.ts
-│   │   └── validators.ts
-│   ├── app.ts                    # Express factory + /metrics endpoint
-│   └── server.ts                 # Entry point (tracer imported first)
+│   │   ├── jwt.ts                 # JWT sign/verify helpers
+│   │   ├── response.ts            # Standardized API response helpers
+│   │   └── validators.ts          # Zod schemas
+│   ├── app.ts                     # Express factory + /metrics endpoint
+│   └── server.ts                  # Entry point (tracer imported first)
 ├── .dockerignore
 ├── .env.example
-├── Dockerfile
-├── entrypoint.sh
-├── package.json
-└── README.md
+├── Dockerfile                     # Multi-stage production image
+├── entrypoint.sh                  # DB sync + seed → start server
+└── package.json
 ```
-
----
-
-## Observability Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                  auth-service :3000                  │
-│                                                      │
-│  /metrics  ──────────────────────────► Prometheus   │
-│  stdout (JSON logs) ─────► Alloy ───► Loki          │
-│  OTLP traces (gRPC) ─────► Alloy ───► Tempo         │
-└─────────────────────────────────────────────────────┘
-                                             │
-                                             ▼
-                                         Grafana :3001
-                                    (metrics + logs + traces
-                                     all correlated by trace_id)
-```
-
-### Signal Pipeline
-
-| Signal | Produced by | Collector | Storage | Port |
-|---|---|---|---|---|
-| **Metrics** | `prom-client` → `/metrics` | Prometheus scrape | Prometheus TSDB | 9090 |
-| **Logs** | `Winston` → stdout (JSON) | Alloy Docker log scrape | Loki | 3100 |
-| **Traces** | `OpenTelemetry` → OTLP/gRPC | Alloy OTLP receiver | Tempo | 3200 |
-
-### Correlation
-
-Every log entry emitted by Winston **automatically includes** the active OpenTelemetry `trace_id` and `span_id`. This enables one-click navigation in Grafana:
-
-- **Log → Trace:** click `trace_id` in a Loki log line → jumps to the Tempo trace
-- **Trace → Log:** from a Tempo span → filters Loki for matching `trace_id`
-- **Metric → Trace:** Prometheus exemplars carry `trace_id` → link to Tempo
 
 ---
 
@@ -106,11 +69,10 @@ Every log entry emitted by Winston **automatically includes** the active OpenTel
 - [Bun](https://bun.sh) >= 1.0
 - PostgreSQL >= 14
 
-### 1. Clone & Install
+### 1. Install
 
 ```bash
-git clone https://github.com/sandyxd18/auth-svc-devsecops.git
-cd auth-svc-devsecops
+cd auth-service
 bun install
 ```
 
@@ -129,14 +91,14 @@ NODE_ENV="development"
 ADMIN_USERNAME="admin"
 ADMIN_PASSWORD="Admin@1234!"
 
-# Observability (point to local instances if running)
+# Observability
 SERVICE_NAME="auth-microservice"
 SERVICE_VERSION="1.0.0"
 OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
 LOKI_HOST="http://localhost:3100"
 ```
 
-### 3. Set Up Database & Seed
+### 3. Setup Database & Seed
 
 ```bash
 bun run db:generate
@@ -144,116 +106,12 @@ bun run db:push
 bun run seed
 ```
 
-### 4. Start the Server
+### 4. Start
 
 ```bash
 bun run dev     # hot reload
 bun run start   # production
 ```
-
----
-
-### Service URLs setelah stack berjalan
-
-| Service | URL | Credentials |
-|---|---|---|
-| **Auth API** | http://localhost:3000 | — |
-| **Grafana** | http://localhost:3001 | admin / admin |
-| **Prometheus** | http://localhost:9090 | — |
-| **Alloy UI** | http://localhost:12345 | — |
-| **Loki** | http://localhost:3100 | — |
-| **Tempo** | http://localhost:3200 | — |
-
-### Boot Sequence
-
-```
-[entrypoint] Syncing database schema...
-🚀  Your database is now in sync with your Prisma schema.
-[entrypoint] Running seeder...
-[Seed] Default admin user ready: admin (admin)
-[entrypoint] Starting server...
-[Tracer] OpenTelemetry SDK started → http://alloy:4317
-[DB] Connected to PostgreSQL via Prisma ✓
-[Server] Auth microservice started — port 3000
-```
-
----
-
-## Grafana — Using the Dashboards
-
-### 1. Pre-built Dashboard
-
-Grafana auto-provisions the **"Auth Microservice — Overview"** dashboard on startup. Navigate to:
-
-`Grafana → Dashboards → Auth Microservice → Auth Microservice — Overview`
-
-Panels included:
-- Request rate (req/s)
-- Error rate (5xx %)
-- Latency percentiles (p50 / p95 / p99)
-- In-flight requests
-- Request rate per route
-- Auth operations (register / login / delete) by status
-- HTTP status code breakdown
-- Live log stream from Loki
-
-### 2. Explore — Logs (Loki)
-
-```
-Grafana → Explore → datasource: Loki
-Query: {service_name="auth_service"}
-```
-
-Filter by level:
-```
-{service_name="auth_service"} | json | level="error"
-```
-
-Filter by trace_id (correlation):
-```
-{service_name="auth_service"} | json | trace_id="<paste-trace-id>"
-```
-
-### 3. Explore — Traces (Tempo)
-
-```
-Grafana → Explore → datasource: Tempo
-Search: Service Name = auth-microservice
-```
-
-From any trace span you can click **"Logs for this span"** to jump directly to the correlated Loki logs.
-
-### 4. Explore — Metrics (Prometheus)
-
-Useful queries:
-
-```promql
-# Request rate
-rate(http_requests_total{service="auth-microservice"}[1m])
-
-# p95 latency in ms
-histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000
-
-# Login success vs failure
-rate(auth_operations_total{operation="login"}[5m])
-
-# Error rate %
-100 * sum(rate(http_requests_total{status_code=~"5.."}[1m])) / sum(rate(http_requests_total[1m]))
-```
-
----
-
-## Prometheus Metrics Reference
-
-| Metric | Type | Labels | Description |
-|---|---|---|---|
-| `http_requests_total` | Counter | `method`, `route`, `status_code` | Total HTTP requests |
-| `http_request_duration_seconds` | Histogram | `method`, `route`, `status_code` | Request latency distribution |
-| `http_requests_in_flight` | Gauge | `method`, `route` | Active in-flight requests |
-| `auth_operations_total` | Counter | `operation`, `status` | Auth business operations |
-| `process_cpu_seconds_total` | Counter | — | Node.js process CPU (default) |
-| `process_resident_memory_bytes` | Gauge | — | Memory usage (default) |
-| `nodejs_eventloop_lag_seconds` | Gauge | — | Event loop lag (default) |
 
 ---
 
@@ -279,15 +137,24 @@ rate(auth_operations_total{operation="login"}[5m])
 
 ### POST /auth/register
 
+Register a new user account.
+
+**Request:**
 ```json
-// Request
 { "username": "alice", "password": "securepass123", "role": "user" }
+```
 
-// 201 Created
-{ "success": true, "message": "User registered successfully",
-  "data": { "id": "uuid", "username": "alice", "role": "user", "created_at": "..." } }
+**201 Created:**
+```json
+{
+  "success": true,
+  "message": "User registered successfully",
+  "data": { "id": "uuid", "username": "alice", "role": "user", "created_at": "..." }
+}
+```
 
-// 409 Conflict
+**409 Conflict:**
+```json
 { "success": false, "error": "Username already taken" }
 ```
 
@@ -295,15 +162,27 @@ rate(auth_operations_total{operation="login"}[5m])
 
 ### POST /auth/login
 
+Authenticate and receive a JWT token.
+
+**Request:**
 ```json
-// Request
 { "username": "alice", "password": "securepass123" }
+```
 
-// 200 OK
-{ "success": true, "message": "Login successful",
-  "data": { "token": "eyJ...", "user": { "id": "uuid", "username": "alice", "role": "user" } } }
+**200 OK:**
+```json
+{
+  "success": true,
+  "message": "Login successful",
+  "data": {
+    "token": "eyJ...",
+    "user": { "id": "uuid", "username": "alice", "role": "user" }
+  }
+}
+```
 
-// 401 Unauthorized
+**401 Unauthorized:**
+```json
 { "success": false, "error": "Invalid username or password" }
 ```
 
@@ -311,25 +190,38 @@ rate(auth_operations_total{operation="login"}[5m])
 
 ### GET /auth/profile
 
-```
-Authorization: Bearer <token>
+Get the authenticated user's profile.
 
-// 200 OK
-{ "success": true, "data": { "id": "uuid", "username": "alice", "role": "user", "created_at": "..." } }
+**Headers:** `Authorization: Bearer <token>`
+
+**200 OK:**
+```json
+{
+  "success": true,
+  "data": { "id": "uuid", "username": "alice", "role": "user", "created_at": "..." }
+}
 ```
 
 ---
 
 ### PATCH /auth/password
 
+Update the authenticated user's own password.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Request:**
 ```json
-// Request  (Authorization: Bearer <token>)
 { "current_password": "securepass123", "new_password": "newStrongPass456" }
+```
 
-// 200 OK
+**200 OK:**
+```json
 { "success": true, "message": "Password updated successfully", "data": null }
+```
 
-// 401 Unauthorized
+**401 Unauthorized:**
+```json
 { "success": false, "error": "Current password is incorrect" }
 ```
 
@@ -337,11 +229,17 @@ Authorization: Bearer <token>
 
 ### DELETE /auth/account
 
-```json
-// Request  (Authorization: Bearer <token>)
-{ "password": "securepass123" }
+Delete the authenticated user's own account.
 
-// 200 OK
+**Headers:** `Authorization: Bearer <token>`
+
+**Request:**
+```json
+{ "password": "securepass123" }
+```
+
+**200 OK:**
+```json
 { "success": true, "message": "Account deleted successfully", "data": null }
 ```
 
@@ -349,25 +247,40 @@ Authorization: Bearer <token>
 
 ### GET /auth/admin/users
 
-```
-Authorization: Bearer <admin-token>
+List all registered users (admin only).
 
-// 200 OK
-{ "success": true, "data": [ { "id": "...", "username": "admin", "role": "admin", "created_at": "..." }, ... ] }
+**Headers:** `Authorization: Bearer <admin-token>`
+
+**200 OK:**
+```json
+{
+  "success": true,
+  "data": [
+    { "id": "...", "username": "admin", "role": "admin", "created_at": "..." }
+  ]
+}
 ```
 
 ---
 
 ### PATCH /auth/admin/users/:id/password
 
+Force-reset any user's password (admin only).
+
+**Headers:** `Authorization: Bearer <admin-token>`
+
+**Request:**
 ```json
-// Request  (Authorization: Bearer <admin-token>)
 { "new_password": "resetted123" }
+```
 
-// 200 OK
+**200 OK:**
+```json
 { "success": true, "message": "Password for user <id> updated successfully", "data": null }
+```
 
-// 404 Not Found
+**404 Not Found:**
+```json
 { "success": false, "error": "User not found" }
 ```
 
@@ -375,14 +288,21 @@ Authorization: Bearer <admin-token>
 
 ### DELETE /auth/admin/users/:id
 
+Delete any user account (admin only). Admins cannot delete their own account via this endpoint.
+
+**Headers:** `Authorization: Bearer <admin-token>`
+
+**200 OK:**
+```json
+{
+  "success": true,
+  "message": "User deleted successfully",
+  "data": { "deleted_user": { "id": "...", "username": "alice", "role": "user" } }
+}
 ```
-Authorization: Bearer <admin-token>
 
-// 200 OK
-{ "success": true, "message": "User deleted successfully",
-  "data": { "deleted_user": { "id": "...", "username": "alice", "role": "user" } } }
-
-// 403 Forbidden (deleting self)
+**403 Forbidden (deleting self):**
+```json
 { "success": false, "error": "Admins cannot delete their own account via this endpoint" }
 ```
 
@@ -396,9 +316,7 @@ Authorization: Bearer <admin-token>
 | password | `Admin@1234!` |
 | role | `admin` |
 
-> **Wajib ganti** `ADMIN_PASSWORD` di `.env` sebelum production.
-
-Seeder menggunakan `upsert` — aman dijalankan berkali-kali.
+> **Wajib ganti** `ADMIN_PASSWORD` di `.env` sebelum production. Seeder menggunakan `upsert` — aman dijalankan berkali-kali.
 
 ---
 
@@ -410,17 +328,74 @@ Seeder menggunakan `upsert` — aman dijalankan berkali-kali.
 
 ---
 
-## Security Notes
+## Example API Usage (curl)
 
-- Passwords hashed dengan bcrypt (12 salt rounds)
-- JWT secret dari environment — tidak pernah hardcoded
-- Pesan error login generik — mencegah username enumeration
-- `password_hash` tidak pernah dikembalikan di response manapun
-- Header `x-powered-by` dinonaktifkan
-- Semua input divalidasi Zod sebelum menyentuh DB
-- Prisma ORM mencegah SQL injection by design
-- User hanya bisa mengubah/menghapus akun sendiri
-- Admin dilindungi dari menghapus akun sendiri
+```bash
+BASE=http://localhost:3000
+
+# Register user
+curl -X POST $BASE/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"alice","password":"securepass123","role":"user"}'
+
+# Login
+TOKEN=$(curl -s -X POST $BASE/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"Admin@1234!"}' \
+  | jq -r '.data.token')
+
+# Get profile
+curl -H "Authorization: Bearer $TOKEN" $BASE/auth/profile
+
+# Update password
+curl -X PATCH $BASE/auth/password \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"current_password":"Admin@1234!","new_password":"NewAdmin@5678!"}'
+
+# List all users (admin)
+curl -H "Authorization: Bearer $TOKEN" $BASE/auth/admin/users
+
+# Health check
+curl $BASE/health
+```
+
+---
+
+## 📊 Observability
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                  auth-service :3000                        │
+│                                                            │
+│  /metrics  ──────────────────────────► Prometheus          │
+│  stdout (JSON logs) ─────► Alloy ───► Loki                │
+│  OTLP traces (gRPC) ─────► Alloy ───► Tempo               │
+└──────────────────────────────────────────────────────────┘
+                                             │
+                                             ▼
+                                         Grafana :8000
+                              (metrics + logs + traces correlated)
+```
+
+### Signal Pipeline
+
+| Signal | Produced by | Collector | Storage |
+|---|---|---|---|
+| **Metrics** | `prom-client` → `/metrics` | Prometheus scrape | Prometheus TSDB |
+| **Logs** | `Winston` JSON → stdout | Alloy Docker scrape | Loki |
+| **Traces** | `OpenTelemetry` → OTLP/gRPC | Alloy OTLP receiver | Tempo |
+
+### Prometheus Metrics
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `http_requests_total` | Counter | `method`, `route`, `status_code` | Total HTTP requests |
+| `http_request_duration_seconds` | Histogram | `method`, `route`, `status_code` | Request latency distribution |
+| `http_requests_in_flight` | Gauge | `method`, `route` | Active in-flight requests |
+| `auth_operations_total` | Counter | `operation`, `status` | Auth business operations |
 
 ---
 
@@ -437,3 +412,18 @@ Seeder menggunakan `upsert` — aman dijalankan berkali-kali.
 | `bun run db:migrate:prod` | Run existing migrations (prod) |
 | `bun run db:studio` | Open Prisma Studio GUI |
 | `bun run db:reset` | Reset database (dev only) |
+
+---
+
+## Security Notes
+
+- Passwords hashed with bcrypt (12 salt rounds)
+- JWT secret from environment — never hardcoded
+- Generic login error messages — prevents username enumeration
+- `password_hash` never returned in any API response
+- `x-powered-by` header disabled
+- All input validated with Zod before touching DB
+- Prisma ORM prevents SQL injection by design
+- Users can only modify/delete their own accounts
+- Admins protected from deleting their own account
+- Non-root container user (UID 1001) in Docker
