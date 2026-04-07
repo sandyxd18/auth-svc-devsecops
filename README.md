@@ -38,6 +38,7 @@ auth-service/
 │   ├── middleware/
 │   │   ├── auth.ts                # authenticateJWT + authorizeRole
 │   │   ├── errorHandler.ts        # Structured error logging
+│   │   ├── rateLimiter.ts         # In-memory rate limiter per IP
 │   │   └── requestLogger.ts       # HTTP log + Prometheus metrics per request
 │   ├── routes/
 │   │   └── auth.routes.ts         # Route definitions
@@ -49,6 +50,7 @@ auth-service/
 │   │   └── tracer.ts              # OpenTelemetry SDK init (MUST load first)
 │   ├── utils/
 │   │   ├── jwt.ts                 # JWT sign/verify helpers
+│   │   ├── recovery.ts            # Recovery key generation (RC-xxxx-xxxx-xxxx-xxxx)
 │   │   ├── response.ts            # Standardized API response helpers
 │   │   └── validators.ts          # Zod schemas
 │   ├── app.ts                     # Express factory + /metrics endpoint
@@ -119,25 +121,28 @@ bun run start   # production
 
 ### Endpoint Summary
 
-| Method | Endpoint | Auth | Role | Description |
-|---|---|---|---|---|
-| GET | `/health` | — | — | Health check |
-| GET | `/metrics` | — | — | Prometheus metrics scrape |
-| POST | `/auth/register` | — | — | Register new user |
-| POST | `/auth/login` | — | — | Login, get JWT |
-| GET | `/auth/profile` | ✅ JWT | any | Get own profile |
-| PATCH | `/auth/password` | ✅ JWT | any | Update own password |
-| DELETE | `/auth/account` | ✅ JWT | any | Delete own account |
-| GET | `/auth/admin-only` | ✅ JWT | admin | Admin ping |
-| GET | `/auth/admin/users` | ✅ JWT | admin | List all users |
-| PATCH | `/auth/admin/users/:id/password` | ✅ JWT | admin | Force-reset user password |
-| DELETE | `/auth/admin/users/:id` | ✅ JWT | admin | Delete any user |
+| Method | Endpoint | Auth | Role | Rate Limit | Description |
+|---|---|---|---|---|---|
+| GET | `/health` | — | — | — | Health check |
+| GET | `/metrics` | — | — | — | Prometheus metrics scrape |
+| POST | `/auth/register` | — | — | 20/15min | Register new user |
+| POST | `/auth/login` | — | — | 20/15min | Login, get JWT |
+| POST | `/auth/forgot-password` | — | — | **5/15min** | Reset password via recovery key |
+| GET | `/auth/profile` | ✅ JWT | any | — | Get own profile |
+| PATCH | `/auth/password` | ✅ JWT | any | — | Update own password |
+| DELETE | `/auth/account` | ✅ JWT | any | — | Delete own account |
+| POST | `/auth/recovery-key/generate` | ✅ JWT | any | — | Generate first recovery key |
+| POST | `/auth/recovery-key/regenerate` | ✅ JWT | any | — | Rotate (regenerate) recovery key |
+| GET | `/auth/admin-only` | ✅ JWT | admin | — | Admin ping |
+| GET | `/auth/admin/users` | ✅ JWT | admin | — | List all users |
+| PATCH | `/auth/admin/users/:id/password` | ✅ JWT | admin | — | Force-reset user password |
+| DELETE | `/auth/admin/users/:id` | ✅ JWT | admin | — | Delete any user |
 
 ---
 
 ### POST /auth/register
 
-Register a new user account.
+Register a new user account. Returns a **recovery key** that must be saved by the user — it is shown only once.
 
 **Request:**
 ```json
@@ -148,10 +153,18 @@ Register a new user account.
 ```json
 {
   "success": true,
-  "message": "User registered successfully",
-  "data": { "id": "uuid", "username": "alice", "role": "user", "created_at": "..." }
+  "message": "User registered successfully. Please save your recovery key — it will not be shown again.",
+  "data": {
+    "id": "uuid",
+    "username": "alice",
+    "role": "user",
+    "created_at": "...",
+    "recovery_key": "RC-a7f2-k9m3-x4p8-n2d6"
+  }
 }
 ```
+
+> ⚠️ **The `recovery_key` is only returned during registration.** It is stored as a bcrypt hash in the database and cannot be retrieved later.
 
 **409 Conflict:**
 ```json
@@ -176,10 +189,13 @@ Authenticate and receive a JWT token.
   "message": "Login successful",
   "data": {
     "token": "eyJ...",
-    "user": { "id": "uuid", "username": "alice", "role": "user" }
+    "user": { "id": "uuid", "username": "alice", "role": "user" },
+    "has_recovery_key": true
   }
 }
 ```
+
+> The `has_recovery_key` field indicates whether the user has a recovery key set up. If `false`, the client should prompt the user to generate one via `POST /auth/recovery-key/generate`.
 
 **401 Unauthorized:**
 ```json
@@ -198,7 +214,7 @@ Get the authenticated user's profile.
 ```json
 {
   "success": true,
-  "data": { "id": "uuid", "username": "alice", "role": "user", "created_at": "..." }
+  "data": { "id": "uuid", "username": "alice", "role": "user", "created_at": "...", "has_recovery_key": true }
 }
 ```
 
@@ -241,6 +257,101 @@ Delete the authenticated user's own account.
 **200 OK:**
 ```json
 { "success": true, "message": "Account deleted successfully", "data": null }
+```
+
+---
+
+### POST /auth/forgot-password
+
+Reset password using a recovery key. **Public endpoint** — no JWT required, but strictly rate-limited (5 requests per 15 minutes per IP).
+
+On success, the old recovery key is invalidated and a **new recovery key** is returned.
+
+**Request:**
+```json
+{
+  "username": "alice",
+  "recovery_key": "RC-a7f2-k9m3-x4p8-n2d6",
+  "new_password": "myNewSecurePass456"
+}
+```
+
+**200 OK:**
+```json
+{
+  "success": true,
+  "message": "Password has been reset successfully. Please save your new recovery key — it will not be shown again.",
+  "data": {
+    "new_recovery_key": "RC-m3x8-p2d7-k9a4-f6n1"
+  }
+}
+```
+
+> ⚠️ **The recovery key is rotated on every successful reset.** The old key becomes invalid immediately. Save the new one.
+
+**401 Unauthorized:**
+```json
+{ "success": false, "error": "Invalid username or recovery key" }
+```
+
+**429 Too Many Requests:**
+```json
+{ "success": false, "error": "Too many password reset attempts. Please try again in 15 minutes." }
+```
+
+---
+
+### POST /auth/recovery-key/generate
+
+Generate a recovery key for the first time — for existing users who registered before this feature was added. Requires password confirmation.
+
+If the user already has a recovery key, returns `409 Conflict` — use the regenerate endpoint instead.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Request:**
+```json
+{ "password": "securepass123" }
+```
+
+**201 Created:**
+```json
+{
+  "success": true,
+  "message": "Recovery key generated successfully. Please save it — it will not be shown again.",
+  "data": {
+    "recovery_key": "RC-a7f2-k9m3-x4p8-n2d6"
+  }
+}
+```
+
+**409 Conflict (already has key):**
+```json
+{ "success": false, "error": "Recovery key already exists. Use the regenerate endpoint to get a new one." }
+```
+
+---
+
+### POST /auth/recovery-key/regenerate
+
+Rotate (regenerate) the recovery key. Invalidates the previous key and returns a new one. Requires password confirmation.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Request:**
+```json
+{ "password": "securepass123" }
+```
+
+**200 OK:**
+```json
+{
+  "success": true,
+  "message": "Recovery key regenerated successfully. Please save the new key — the old one is now invalid.",
+  "data": {
+    "recovery_key": "RC-m3x8-p2d7-k9a4-f6n1"
+  }
+}
 ```
 
 ---
@@ -333,7 +444,7 @@ Delete any user account (admin only). Admins cannot delete their own account via
 ```bash
 BASE=http://localhost:3000
 
-# Register user
+# Register user (save the recovery_key from response!)
 curl -X POST $BASE/auth/register \
   -H "Content-Type: application/json" \
   -d '{"username":"alice","password":"securepass123","role":"user"}'
@@ -352,6 +463,23 @@ curl -X PATCH $BASE/auth/password \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"current_password":"Admin@1234!","new_password":"NewAdmin@5678!"}'
+
+# Forgot password (using recovery key)
+curl -X POST $BASE/auth/forgot-password \
+  -H "Content-Type: application/json" \
+  -d '{"username":"alice","recovery_key":"RC-a7f2-k9m3-x4p8-n2d6","new_password":"newPass123"}'
+
+# Generate recovery key (for existing users without one)
+curl -X POST $BASE/auth/recovery-key/generate \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"password":"Admin@1234!"}'
+
+# Regenerate (rotate) recovery key
+curl -X POST $BASE/auth/recovery-key/regenerate \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"password":"Admin@1234!"}'
 
 # List all users (admin)
 curl -H "Authorization: Bearer $TOKEN" $BASE/auth/admin/users
@@ -418,12 +546,17 @@ curl $BASE/health
 ## Security Notes
 
 - Passwords hashed with bcrypt (12 salt rounds)
+- **Recovery keys** hashed with bcrypt — never stored in plain text
+- Recovery keys shown only once (at registration or after reset/regeneration)
+- Recovery keys rotated on every successful forgot-password usage
 - JWT secret from environment — never hardcoded
-- Generic login error messages — prevents username enumeration
-- `password_hash` never returned in any API response
+- Generic login/forgot-password error messages — prevents username enumeration
+- `password_hash` and `recovery_key_hash` never returned in any API response
+- **Rate limiting** on public auth endpoints (register, login: 20/15min; forgot-password: 5/15min)
 - `x-powered-by` header disabled
 - All input validated with Zod before touching DB
 - Prisma ORM prevents SQL injection by design
 - Users can only modify/delete their own accounts
 - Admins protected from deleting their own account
 - Non-root container user (UID 1001) in Docker
+- Recovery key uses ambiguity-free charset (no 0/O, 1/l/I confusion)

@@ -5,6 +5,7 @@
 
 import bcrypt from "bcryptjs";
 import prisma from "./prisma";
+import { generateRecoveryKey } from "../utils/recovery";
 
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME ?? "admin";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "Admin@1234!";
@@ -21,18 +22,25 @@ async function seed() {
 
   const password_hash = await bcrypt.hash(ADMIN_PASSWORD, 12);
 
+  // Generate a recovery key for the admin user
+  const recoveryKey = generateRecoveryKey();
+  const recovery_key_hash = await bcrypt.hash(recoveryKey, 12);
+
   // upsert — create if not exists, update password if already exists
   const admin = await prisma.user.upsert({
     where:  { username: ADMIN_USERNAME },
-    update: { password_hash, role: "admin" }, // ensure role stays admin even if changed
-    create: { username: ADMIN_USERNAME, password_hash, role: "admin" },
+    update: { password_hash, role: "admin", recovery_key_hash },
+    create: { username: ADMIN_USERNAME, password_hash, role: "admin", recovery_key_hash },
     select: { id: true, username: true, role: true, created_at: true },
   });
 
   console.log("[Seed] Default admin user ready:");
-  console.log(`       username : ${admin.username}`);
-  console.log(`       role     : ${admin.role}`);
-  console.log(`       id       : ${admin.id}`);
+  console.log(`       username     : ${admin.username}`);
+  console.log(`       role         : ${admin.role}`);
+  console.log(`       id           : ${admin.id}`);
+  console.log(`       recovery_key : ${recoveryKey}`);
+  console.log("");
+  console.log("[Seed] ⚠ SAVE THE RECOVERY KEY ABOVE — it will not be shown again!");
   console.log("[Seed] Done.");
 }
 
@@ -42,3 +50,4 @@ seed()
     process.exit(1);
   })
   .finally(() => prisma.$disconnect());
+

@@ -15,6 +15,9 @@ import {
   loginSchema,
   updatePasswordSchema,
   adminUpdatePasswordSchema,
+  forgotPasswordSchema,
+  regenerateRecoveryKeySchema,
+  generateRecoveryKeySchema,
 } from "../utils/validators";
 import { sendSuccess, sendError } from "../utils/response";
 
@@ -28,8 +31,8 @@ export const AuthController = {
       const parsed = registerSchema.safeParse(req.body);
       if (!parsed.success) { sendError(res, "Validation failed", 400, parsed.error.flatten()); return; }
 
-      const user = await AuthService.register(parsed.data);
-      sendSuccess(res, user, "User registered successfully", 201);
+      const result = await AuthService.register(parsed.data);
+      sendSuccess(res, result, "User registered successfully. Please save your recovery key — it will not be shown again.", 201);
     } catch (err) {
       if (err instanceof ConflictError) sendError(res, err.message, 409);
       else next(err);
@@ -44,6 +47,20 @@ export const AuthController = {
 
       const result = await AuthService.login(parsed.data);
       sendSuccess(res, result, "Login successful");
+    } catch (err) {
+      if (err instanceof UnauthorizedError) sendError(res, err.message, 401);
+      else next(err);
+    }
+  },
+
+  /** POST /auth/forgot-password */
+  async forgotPassword(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const parsed = forgotPasswordSchema.safeParse(req.body);
+      if (!parsed.success) { sendError(res, "Validation failed", 400, parsed.error.flatten()); return; }
+
+      const result = await AuthService.forgotPassword(parsed.data);
+      sendSuccess(res, result, "Password has been reset successfully. Please save your new recovery key — it will not be shown again.");
     } catch (err) {
       if (err instanceof UnauthorizedError) sendError(res, err.message, 401);
       else next(err);
@@ -95,6 +112,45 @@ export const AuthController = {
 
       await AuthService.deleteUser(req.user!.sub, password);
       sendSuccess(res, null, "Account deleted successfully");
+    } catch (err) {
+      if (err instanceof UnauthorizedError) sendError(res, err.message, 401);
+      else if (err instanceof NotFoundError) sendError(res, err.message, 404);
+      else next(err);
+    }
+  },
+
+  /**
+   * POST /auth/recovery-key/generate
+   * Generate first recovery key for existing users who don't have one.
+   * Requires password confirmation.
+   */
+  async generateRecoveryKey(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const parsed = generateRecoveryKeySchema.safeParse(req.body);
+      if (!parsed.success) { sendError(res, "Validation failed", 400, parsed.error.flatten()); return; }
+
+      const result = await AuthService.generateRecoveryKey(req.user!.sub, parsed.data.password);
+      sendSuccess(res, result, "Recovery key generated successfully. Please save it — it will not be shown again.", 201);
+    } catch (err) {
+      if (err instanceof UnauthorizedError) sendError(res, err.message, 401);
+      else if (err instanceof NotFoundError) sendError(res, err.message, 404);
+      else if (err instanceof ConflictError) sendError(res, err.message, 409);
+      else next(err);
+    }
+  },
+
+  /**
+   * POST /auth/recovery-key/regenerate
+   * Regenerate (rotate) recovery key for authenticated users.
+   * Invalidates the previous key. Requires password confirmation.
+   */
+  async regenerateRecoveryKey(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const parsed = regenerateRecoveryKeySchema.safeParse(req.body);
+      if (!parsed.success) { sendError(res, "Validation failed", 400, parsed.error.flatten()); return; }
+
+      const result = await AuthService.regenerateRecoveryKey(req.user!.sub, parsed.data.password);
+      sendSuccess(res, result, "Recovery key regenerated successfully. Please save the new key — the old one is now invalid.");
     } catch (err) {
       if (err instanceof UnauthorizedError) sendError(res, err.message, 401);
       else if (err instanceof NotFoundError) sendError(res, err.message, 404);

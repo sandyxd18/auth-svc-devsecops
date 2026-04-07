@@ -5,6 +5,7 @@
 import bcrypt from "bcryptjs";
 import prisma from "../db/prisma";
 import { signToken } from "../utils/jwt";
+import { generateRecoveryKey, isValidRecoveryKeyFormat } from "../utils/recovery";
 import logger from "../telemetry/logger";
 import { authOperationsTotal } from "../telemetry/metrics";
 import type {
@@ -12,6 +13,7 @@ import type {
   LoginInput,
   UpdatePasswordInput,
   AdminUpdatePasswordInput,
+  ForgotPasswordInput,
 } from "../utils/validators";
 
 const SALT_ROUNDS = 12;
@@ -34,14 +36,20 @@ export const AuthService = {
       throw new ConflictError("Username already taken");
     }
 
+    // Generate recovery key and hash it (like a password — stored hashed, shown once)
+    const recoveryKey = generateRecoveryKey();
+    const recovery_key_hash = await bcrypt.hash(recoveryKey, SALT_ROUNDS);
+
     const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
     const user = await prisma.user.create({
-      data: { username, password_hash, role },
+      data: { username, password_hash, role, recovery_key_hash },
       select: { id: true, username: true, role: true, created_at: true },
     });
 
     recordOp("register", "success", { user_id: user.id, role: user.role });
-    return user;
+
+    // Return user data + plain recovery key (shown only once, never stored in plain text)
+    return { ...user, recovery_key: recoveryKey };
   },
 
   async login(input: LoginInput) {
@@ -62,16 +70,24 @@ export const AuthService = {
     const token = signToken({ sub: user.id, username: user.username, role: user.role });
     recordOp("login", "success", { user_id: user.id, role: user.role });
 
-    return { token, user: { id: user.id, username: user.username, role: user.role } };
+    return {
+      token,
+      user: { id: user.id, username: user.username, role: user.role },
+      // Inform the client whether this user has a recovery key set up
+      has_recovery_key: !!user.recovery_key_hash,
+    };
   },
 
   async getProfile(userId: string) {
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, username: true, role: true, created_at: true },
+      select: { id: true, username: true, role: true, created_at: true, recovery_key_hash: true },
     });
     if (!user) throw new NotFoundError("User not found");
-    return user;
+
+    // Don't expose the hash — just indicate whether a recovery key exists
+    const { recovery_key_hash, ...profile } = user;
+    return { ...profile, has_recovery_key: !!recovery_key_hash };
   },
 
   async updatePassword(userId: string, input: UpdatePasswordInput) {
@@ -136,6 +152,124 @@ export const AuthService = {
       select: { id: true, username: true, role: true, created_at: true },
       orderBy: { created_at: "asc" },
     });
+  },
+
+  // ─── Recovery Key / Forgot Password ────────────────────────────────────────
+
+  /**
+   * Forgot password — reset password using recovery key.
+   * On success, the old recovery key is invalidated and a new one is issued.
+   */
+  async forgotPassword(input: ForgotPasswordInput) {
+    const { username, recovery_key, new_password } = input;
+
+    const user = await prisma.user.findUnique({ where: { username } });
+    if (!user) {
+      recordOp("forgot_password", "failure", { reason: "user_not_found" });
+      throw new UnauthorizedError("Invalid username or recovery key");
+    }
+
+    // Check if user has a recovery key set
+    if (!user.recovery_key_hash) {
+      recordOp("forgot_password", "failure", { reason: "no_recovery_key", user_id: user.id });
+      throw new UnauthorizedError("Invalid username or recovery key");
+    }
+
+    // Validate recovery key format
+    if (!isValidRecoveryKeyFormat(recovery_key)) {
+      recordOp("forgot_password", "failure", { reason: "invalid_key_format", user_id: user.id });
+      throw new UnauthorizedError("Invalid username or recovery key");
+    }
+
+    // Compare recovery key hash
+    const keyMatch = await bcrypt.compare(recovery_key, user.recovery_key_hash);
+    if (!keyMatch) {
+      recordOp("forgot_password", "failure", { reason: "wrong_recovery_key", user_id: user.id });
+      throw new UnauthorizedError("Invalid username or recovery key");
+    }
+
+    // All checks passed — update password and rotate recovery key
+    const newRecoveryKey = generateRecoveryKey();
+    const [newPasswordHash, newRecoveryKeyHash] = await Promise.all([
+      bcrypt.hash(new_password, SALT_ROUNDS),
+      bcrypt.hash(newRecoveryKey, SALT_ROUNDS),
+    ]);
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        password_hash: newPasswordHash,
+        recovery_key_hash: newRecoveryKeyHash,
+      },
+    });
+
+    recordOp("forgot_password", "success", { user_id: user.id });
+
+    // Return the new recovery key (shown only once)
+    return { new_recovery_key: newRecoveryKey };
+  },
+
+  /**
+   * Generate first recovery key — for existing users who registered before
+   * the recovery key feature was added.
+   * Requires password confirmation.
+   */
+  async generateRecoveryKey(userId: string, password: string) {
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundError("User not found");
+
+    // Check if user already has a recovery key
+    if (user.recovery_key_hash) {
+      throw new ConflictError(
+        "Recovery key already exists. Use the regenerate endpoint to get a new one."
+      );
+    }
+
+    // Verify password
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match) {
+      recordOp("generate_recovery_key", "failure", { reason: "wrong_password", user_id: userId });
+      throw new UnauthorizedError("Password is incorrect");
+    }
+
+    const recoveryKey = generateRecoveryKey();
+    const recovery_key_hash = await bcrypt.hash(recoveryKey, SALT_ROUNDS);
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: { recovery_key_hash },
+    });
+
+    recordOp("generate_recovery_key", "success", { user_id: userId });
+    return { recovery_key: recoveryKey };
+  },
+
+  /**
+   * Regenerate recovery key — for authenticated users who want to rotate
+   * their existing key. Requires password confirmation.
+   * Invalidates the previous recovery key.
+   */
+  async regenerateRecoveryKey(userId: string, password: string) {
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundError("User not found");
+
+    // Verify password
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match) {
+      recordOp("regenerate_recovery_key", "failure", { reason: "wrong_password", user_id: userId });
+      throw new UnauthorizedError("Password is incorrect");
+    }
+
+    const recoveryKey = generateRecoveryKey();
+    const recovery_key_hash = await bcrypt.hash(recoveryKey, SALT_ROUNDS);
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: { recovery_key_hash },
+    });
+
+    recordOp("regenerate_recovery_key", "success", { user_id: userId });
+    return { recovery_key: recoveryKey };
   },
 };
 

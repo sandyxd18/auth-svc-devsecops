@@ -44,7 +44,30 @@ export const adminUpdatePasswordSchema = z.object({
     .max(128, "New password is too long"),
 });
 
-export type RegisterInput          = z.infer<typeof registerSchema>;
-export type LoginInput             = z.infer<typeof loginSchema>;
-export type UpdatePasswordInput    = z.infer<typeof updatePasswordSchema>;
-export type AdminUpdatePasswordInput = z.infer<typeof adminUpdatePasswordSchema>;
+// Forgot password — uses recovery key to reset password
+export const forgotPasswordSchema = z.object({
+  username: z.string().min(1, "Username is required").trim(),
+  recovery_key: z.string().min(1, "Recovery key is required"),
+  new_password: z
+    .string()
+    .min(8, "New password must be at least 8 characters")
+    .max(128, "New password is too long"),
+});
+
+// Regenerate recovery key — authenticated user, requires current password
+export const regenerateRecoveryKeySchema = z.object({
+  password: z.string().min(1, "Password is required"),
+});
+
+// Generate first recovery key — for existing users who don't have one yet
+export const generateRecoveryKeySchema = z.object({
+  password: z.string().min(1, "Password is required"),
+});
+
+export type RegisterInput              = z.infer<typeof registerSchema>;
+export type LoginInput                 = z.infer<typeof loginSchema>;
+export type UpdatePasswordInput        = z.infer<typeof updatePasswordSchema>;
+export type AdminUpdatePasswordInput   = z.infer<typeof adminUpdatePasswordSchema>;
+export type ForgotPasswordInput        = z.infer<typeof forgotPasswordSchema>;
+export type RegenerateRecoveryKeyInput = z.infer<typeof regenerateRecoveryKeySchema>;
+export type GenerateRecoveryKeyInput   = z.infer<typeof generateRecoveryKeySchema>;
