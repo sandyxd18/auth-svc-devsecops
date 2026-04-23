@@ -7,13 +7,17 @@ export const registerSchema = z.object({
   username: z
     .string()
     .min(3, "Username must be at least 3 characters")
-    .max(32, "Username must be at most 32 characters")
+    .max(12, "Username must be at most 12 characters")
     .regex(/^[a-zA-Z0-9_]+$/, "Username may only contain letters, numbers, and underscores")
     .trim(),
   password: z
     .string()
     .min(8, "Password must be at least 8 characters")
-    .max(128, "Password is too long"),
+    .max(12, "Password must be at most 12 characters")
+    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+    .regex(/\d/, "Password must contain at least one number")
+    .regex(/[!@#$%^&*(),.?":{}|<>]/, "Password must contain at least one symbol"),
   role: z.enum(["admin", "user"]).optional().default("user"),
 });
 

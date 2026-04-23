@@ -39,6 +39,22 @@ export const AuthController = {
     }
   },
 
+  /** GET /auth/check-username */
+  async checkUsername(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { username } = req.query;
+      if (!username || typeof username !== 'string') {
+        sendError(res, "Username query parameter is required", 400);
+        return;
+      }
+      
+      const result = await AuthService.checkUsername(username as string);
+      sendSuccess(res, result);
+    } catch (err) {
+      next(err);
+    }
+  },
+
   /** POST /auth/login */
   async login(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {

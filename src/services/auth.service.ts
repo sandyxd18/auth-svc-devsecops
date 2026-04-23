@@ -52,6 +52,15 @@ export const AuthService = {
     return { ...user, recovery_key: recoveryKey };
   },
 
+  async checkUsername(username: string) {
+    if (!username) return { available: false };
+    const existing = await prisma.user.findUnique({
+      where: { username },
+      select: { id: true },
+    });
+    return { available: !existing };
+  },
+
   async login(input: LoginInput) {
     const { username, password } = input;
 

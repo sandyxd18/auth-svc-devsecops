@@ -28,6 +28,7 @@ const authLimiter = createRateLimiter({
 // ── Public ────────────────────────────────────────────────────────────────────
 
 router.post("/register", authLimiter, AuthController.register);
+router.get("/check-username", authLimiter, AuthController.checkUsername);
 router.post("/login",    authLimiter, AuthController.login);
 
 // Forgot password — public, rate-limited more strictly
