@@ -3,7 +3,7 @@
 
 import { Router } from "express";
 import { AuthController } from "../controllers/auth.controller";
-import { authenticateJWT, authorizeRole } from "../middleware/auth";
+import { authenticateJWT, authenticateAdminCookie, authenticateUserCookie, authorizeRole } from "../middleware/auth";
 import { createRateLimiter } from "../middleware/rateLimiter";
 
 const router = Router();
@@ -31,7 +31,15 @@ router.post("/register", authLimiter, AuthController.register);
 router.get("/check-username", authLimiter, AuthController.checkUsername);
 router.post("/login",    authLimiter, AuthController.login);
 
-// Forgot password — public, rate-limited more strictly
+// Session restore — strict cookie isolation:
+// /auth/me         → frontend (user_auth_token only)
+// /auth/admin/me   → dashboard (admin_auth_token only)
+router.get("/me",       authenticateUserCookie,  AuthController.me);
+router.get("/admin/me", authenticateAdminCookie, AuthController.adminMe);
+
+// Logout — clears the role-appropriate cookie (?role=admin for dashboard)
+router.post("/logout", AuthController.logout);
+
 router.post("/forgot-password", forgotPasswordLimiter, AuthController.forgotPassword);
 
 // ── User — self-service (any authenticated user) ──────────────────────────────

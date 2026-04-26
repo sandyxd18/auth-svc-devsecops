@@ -62,11 +62,89 @@ export const AuthController = {
       if (!parsed.success) { sendError(res, "Validation failed", 400, parsed.error.flatten()); return; }
 
       const result = await AuthService.login(parsed.data);
-      sendSuccess(res, result, "Login successful");
+
+      const isProduction = process.env.NODE_ENV === "production";
+      const cookieOptions = {
+        httpOnly: true,
+        sameSite: "lax" as const,
+        secure: isProduction,
+        maxAge: 60 * 60 * 1000, // 1 hour
+        path: "/",
+      };
+
+      // Use separate cookie names to isolate admin and user sessions.
+      // admin_auth_token  → only read by dashboard (/auth/admin/me)
+      // user_auth_token   → only read by frontend  (/auth/me)
+      if (result.user.role === "admin") {
+        res.cookie("admin_auth_token", result.token, cookieOptions);
+      } else {
+        res.cookie("user_auth_token", result.token, cookieOptions);
+      }
+
+      sendSuccess(res, {
+        user: result.user,
+        token: result.token,
+        has_recovery_key: result.has_recovery_key,
+      }, "Login successful");
     } catch (err) {
       if (err instanceof UnauthorizedError) sendError(res, err.message, 401);
       else next(err);
     }
+  },
+
+  /**
+   * GET /auth/me
+   * Session restore for REGULAR USERS (frontend).
+   * Reads the user_auth_token cookie. Rejects if no user cookie exists,
+   * even if an admin_auth_token cookie is present — keeps sessions isolated.
+   */
+  async me(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const user = await AuthService.getProfile(req.user!.sub);
+      const { signToken } = await import("../utils/jwt");
+      const token = signToken({ sub: req.user!.sub, username: req.user!.username, role: req.user!.role });
+      sendSuccess(res, { ...user, token });
+    } catch (err) {
+      if (err instanceof NotFoundError) sendError(res, err.message, 404);
+      else next(err);
+    }
+  },
+
+  /**
+   * GET /auth/admin/me
+   * Session restore for ADMINS (dashboard).
+   * Reads the admin_auth_token cookie. Rejects if not admin role.
+   */
+  async adminMe(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (req.user!.role !== "admin") {
+        sendError(res, "Access denied", 403);
+        return;
+      }
+      const user = await AuthService.getProfile(req.user!.sub);
+      const { signToken } = await import("../utils/jwt");
+      const token = signToken({ sub: req.user!.sub, username: req.user!.username, role: req.user!.role });
+      sendSuccess(res, { ...user, token });
+    } catch (err) {
+      if (err instanceof NotFoundError) sendError(res, err.message, 404);
+      else next(err);
+    }
+  },
+
+  /**
+   * POST /auth/logout
+   * Clears the role-appropriate cookie.
+   * Accepts optional query param ?role=admin to clear admin_auth_token.
+   */
+  logout(req: Request, res: Response): void {
+    const isAdmin = req.query.role === "admin";
+    const cookieOptions = { httpOnly: true, sameSite: "lax" as const, path: "/" };
+    if (isAdmin) {
+      res.clearCookie("admin_auth_token", cookieOptions);
+    } else {
+      res.clearCookie("user_auth_token", cookieOptions);
+    }
+    sendSuccess(res, null, "Logged out successfully");
   },
 
   /** POST /auth/forgot-password */
