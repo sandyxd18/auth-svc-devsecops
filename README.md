@@ -126,7 +126,11 @@ bun run start   # production
 | GET | `/health` | — | — | — | Health check |
 | GET | `/metrics` | — | — | — | Prometheus metrics scrape |
 | POST | `/auth/register` | — | — | 20/15min | Register new user |
+| GET | `/auth/check-username` | — | — | 20/15min | Check if username is available |
 | POST | `/auth/login` | — | — | 20/15min | Login, get JWT |
+| GET | `/auth/me` | ✅ Cookie | user | — | Session restore (user_auth_token) |
+| GET | `/auth/admin/me` | ✅ Cookie | admin | — | Session restore (admin_auth_token) |
+| POST | `/auth/logout` | — | — | — | Clear auth cookies |
 | POST | `/auth/forgot-password` | — | — | **5/15min** | Reset password via recovery key |
 | GET | `/auth/profile` | ✅ JWT | any | — | Get own profile |
 | PATCH | `/auth/password` | ✅ JWT | any | — | Update own password |
