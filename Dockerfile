@@ -8,7 +8,8 @@ WORKDIR /app
 # openssl required by Prisma engine on Alpine (musl libc + openssl 3.x)
 RUN apk add --no-cache openssl
 
-COPY package.json bun.lockb* ./
+# Security: package-lock.json carries patched dependency overrides (CVE-2026-44902 fix)
+COPY package.json bun.lockb* package-lock.json* ./
 RUN bun install --frozen-lockfile
 
 # ─────────────────────────────────────────────────────────────────────────────
