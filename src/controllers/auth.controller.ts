@@ -1,7 +1,3 @@
-// src/controllers/auth.controller.ts
-// HTTP layer — parse/validate request, call service, send response.
-// No business logic lives here.
-
 import type { Request, Response, NextFunction } from "express";
 import {
   AuthService,
@@ -47,7 +43,7 @@ export const AuthController = {
         sendError(res, "Username query parameter is required", 400);
         return;
       }
-      
+
       const result = await AuthService.checkUsername(username as string);
       sendSuccess(res, result);
     } catch (err) {
@@ -72,9 +68,6 @@ export const AuthController = {
         path: "/",
       };
 
-      // Use separate cookie names to isolate admin and user sessions.
-      // admin_auth_token  → only read by dashboard (/auth/admin/me)
-      // user_auth_token   → only read by frontend  (/auth/me)
       if (result.user.role === "admin") {
         res.cookie("admin_auth_token", result.token, cookieOptions);
       } else {
@@ -87,17 +80,11 @@ export const AuthController = {
         has_recovery_key: result.has_recovery_key,
       }, "Login successful");
     } catch (err) {
-      if (err instanceof UnauthorizedError) sendError(res, err.message, 401);
+      if (err instanceof UnauthorizedError) sendError(res, "Incorrect username or password.", 401);
       else next(err);
     }
   },
 
-  /**
-   * GET /auth/me
-   * Session restore for REGULAR USERS (frontend).
-   * Reads the user_auth_token cookie. Rejects if no user cookie exists,
-   * even if an admin_auth_token cookie is present — keeps sessions isolated.
-   */
   async me(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const user = await AuthService.getProfile(req.user!.sub);
@@ -110,11 +97,6 @@ export const AuthController = {
     }
   },
 
-  /**
-   * GET /auth/admin/me
-   * Session restore for ADMINS (dashboard).
-   * Reads the admin_auth_token cookie. Rejects if not admin role.
-   */
   async adminMe(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       if (req.user!.role !== "admin") {
@@ -131,11 +113,6 @@ export const AuthController = {
     }
   },
 
-  /**
-   * POST /auth/logout
-   * Clears the role-appropriate cookie.
-   * Accepts optional query param ?role=admin to clear admin_auth_token.
-   */
   logout(req: Request, res: Response): void {
     const isAdmin = req.query.role === "admin";
     const cookieOptions = { httpOnly: true, sameSite: "lax" as const, path: "/" };
@@ -174,10 +151,6 @@ export const AuthController = {
     }
   },
 
-  /**
-   * PATCH /auth/password
-   * User updating their own password — requires current_password + new_password.
-   */
   async updatePassword(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const parsed = updatePasswordSchema.safeParse(req.body);
@@ -192,10 +165,6 @@ export const AuthController = {
     }
   },
 
-  /**
-   * DELETE /auth/account
-   * User deleting their own account — requires password confirmation.
-   */
   async deleteAccount(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { password } = req.body;
@@ -213,11 +182,6 @@ export const AuthController = {
     }
   },
 
-  /**
-   * POST /auth/recovery-key/generate
-   * Generate first recovery key for existing users who don't have one.
-   * Requires password confirmation.
-   */
   async generateRecoveryKey(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const parsed = generateRecoveryKeySchema.safeParse(req.body);
@@ -233,11 +197,6 @@ export const AuthController = {
     }
   },
 
-  /**
-   * POST /auth/recovery-key/regenerate
-   * Regenerate (rotate) recovery key for authenticated users.
-   * Invalidates the previous key. Requires password confirmation.
-   */
   async regenerateRecoveryKey(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const parsed = regenerateRecoveryKeySchema.safeParse(req.body);
@@ -254,15 +213,10 @@ export const AuthController = {
 
   // ── Admin ───────────────────────────────────────────────────────────────────
 
-  /** GET /auth/admin-only */
-  adminOnly(_req: Request, res: Response): void {
+  async adminOnly(_req: Request, res: Response): void {
     sendSuccess(res, { message: "Hello Admin" });
   },
 
-  /**
-   * GET /admin/users
-   * Admin: list all users.
-   */
   async listUsers(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const users = await AuthService.listUsers();
@@ -272,10 +226,6 @@ export const AuthController = {
     }
   },
 
-  /**
-   * PATCH /admin/users/:id/password
-   * Admin: update any user's password without knowing the current one.
-   */
   async adminUpdatePassword(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const parsed = adminUpdatePasswordSchema.safeParse(req.body);
@@ -289,10 +239,6 @@ export const AuthController = {
     }
   },
 
-  /**
-   * DELETE /admin/users/:id
-   * Admin: delete any user by ID (cannot delete self).
-   */
   async adminDeleteUser(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const result = await AuthService.adminDeleteUser(req.user!.sub, req.params.id);

@@ -9,15 +9,17 @@ import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { requestLogger } from "./middleware/requestLogger";
 import { register } from "./telemetry/metrics";
 
-// Allowed origins: frontend (port 80) and dashboard (port 8081)
-const ALLOWED_ORIGINS = [
-  "http://localhost",
-  "http://localhost:80",
-  "http://localhost:8081",
-  // Dev fallback (vite dev servers)
-  "http://localhost:5173",
-  "http://localhost:5174",
-];
+// Allowed origins — loaded from CORS_ALLOWED_ORIGINS env variable (comma-separated).
+// Falls back to localhost defaults for local development.
+const ALLOWED_ORIGINS: string[] = process.env.CORS_ALLOWED_ORIGINS
+  ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean)
+  : [
+      "http://localhost",
+      "http://localhost:80",
+      "http://localhost:8081",
+      "http://localhost:5173",
+      "http://localhost:5174",
+    ];
 
 export function createApp() {
   const app = express();
